@@ -34,28 +34,33 @@ const CATEGORY_DIRS = {
   moves: 'moves',
 };
 
-/** 缓存 catalog */
+/** 缓存成功读到的 catalog。读失败或 JSON 损坏时不写入缓存，下次调用会重试。 */
 let _catalog = null;
 
-/** 读取嵌入式 catalog */
+/** 读取嵌入式 catalog。失败时抛出原始错误，不把空目录永久缓存下来。 */
 async function loadCatalog() {
   if (_catalog) return _catalog;
-  try {
-    _catalog = JSON.parse(await fs.readFile(CATALOG_PATH, 'utf8'));
-    return _catalog;
-  } catch (e) {
-    // 降级：返回空结构，不抛错
-    _catalog = {
-      version: '1.0.0',
-      lenses: [],
-      genres: [],
-      industries: [],
-      forms: [],
-      looks: [],
-      moves: [],
-    };
-    return _catalog;
+  const parsed = JSON.parse(await fs.readFile(CATALOG_PATH, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Invalid embedded catalog at ${CATALOG_PATH}`);
   }
+  _catalog = parsed;
+  return _catalog;
+}
+
+/** 从列表里按 id 查找 */
+function findById(list, id) {
+  if (!id || !Array.isArray(list)) return null;
+  return list.find((x) => x.id === id) || null;
+}
+
+/**
+ * 题材下拉（genreAllOptions）同时包含叙事题材和行业题材。
+ * 先查 genres，再查 industries，与技能切片的 resolveItem 一致。
+ */
+function findGenre(catalog, id) {
+  if (!id || !catalog) return null;
+  return findById(catalog.genres, id) || findById(catalog.industries, id);
 }
 
 /** 列出指定分类的所有条目（轻量元数据） */
@@ -119,6 +124,8 @@ module.exports = {
   CATEGORY_LABELS,
   CATEGORY_DIRS,
   loadCatalog,
+  findById,
+  findGenre,
   listCategory,
   getItem,
   getStats,

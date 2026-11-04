@@ -26,7 +26,7 @@ cd /path/to/n8n
 npm install /path/to/n8n-nodes-dsh-media-director
 ```
 
-重启 n8n 后，在节点面板搜索 "DSh" 即可看到三个节点。
+重启 n8n 后，在节点面板搜索 "DSh" 即可看到四个节点。
 
 ---
 

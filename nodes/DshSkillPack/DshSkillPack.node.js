@@ -11,6 +11,7 @@
 
 const { loadCatalog } = require('../../data/data-loader.js');
 const { buildPackText, layerLabel } = require('../../data/pack.js');
+const { withPairedItem, handleItemError } = require('../../data/node-execute.js');
 const { lensOptions, genreAllOptions, formOptions, lookOptions } = require('../../data/catalog-options.js');
 
 const LAYER_OF_CATEGORY = {
@@ -52,7 +53,7 @@ class DshSkillPack {
   description = {
     name: 'dshSkillPack',
     displayName: 'DSh 技能切片',
-    icon: 'file:../../media-director.svg',
+    icon: 'file:media-director.svg',
     description: '按生成能力（剧本/分镜/提示词/资产）从导演四件套配置切出正确小节并拼装，等价于画布导演套件的 canvas_skill_pack（数据嵌入插件，独立运行）',
     group: ['transform'],
     version: 1,
@@ -132,24 +133,27 @@ class DshSkillPack {
 
   async execute() {
     const items = [];
-    const catalog = await loadCatalog();
-
-    const totalInput = this.getInputData().length;
-    const indices = totalInput > 0 ? Array.from({ length: totalInput }, (_, i) => i) : [0];
+    const input = this.getInputData();
+    const indices = input.length > 0 ? Array.from({ length: input.length }, (_, i) => i) : [0];
 
     for (const idx of indices) {
-      const kind = this.getNodeParameter('kind', idx) || 'prompt';
-      const lensId = String(this.getNodeParameter('lens', idx) || '').trim();
-      const genresStr = this.getNodeParameter('genres', idx);
-      const formId = String(this.getNodeParameter('form', idx) || '').trim();
-      const lookId = String(this.getNodeParameter('look', idx) || '').trim();
-      const includeMoves = this.getNodeParameter('includeMoves', idx) !== false;
-      const outputLanguage = this.getNodeParameter('outputLanguage', idx) || 'zh';
-
-      const genreIds = splitIds(genresStr);
-      const profile = { kind, lens: lensId, genres: genreIds, form: formId, look: lookId, includeMoves };
+      const itemIndex = input.length > 0 ? idx : undefined;
+      let kind = 'prompt';
+      let profile = { kind };
 
       try {
+        kind = this.getNodeParameter('kind', idx) || 'prompt';
+        const lensId = String(this.getNodeParameter('lens', idx) || '').trim();
+        const genresStr = this.getNodeParameter('genres', idx);
+        const formId = String(this.getNodeParameter('form', idx) || '').trim();
+        const lookId = String(this.getNodeParameter('look', idx) || '').trim();
+        const includeMoves = this.getNodeParameter('includeMoves', idx) !== false;
+        const outputLanguage = this.getNodeParameter('outputLanguage', idx) || 'zh';
+
+        const genreIds = splitIds(genresStr);
+        profile = { kind, lens: lensId, genres: genreIds, form: formId, look: lookId, includeMoves };
+
+        const catalog = await loadCatalog();
         // 按固定顺序拼装：导演透镜 → 题材 → 规格 → 影调 → 运镜
         const packItems = [];
         const missed = [];
@@ -193,36 +197,30 @@ class DshSkillPack {
           : `[画布导演套件 技能切片] kind=${kind}`;
         const packed = buildPackText(kind, packItems, { head, zh: outputLanguage !== 'en' });
 
-        items.push({
-          json: {
-            kind,
-            profile,
-            text: packed.text,
-            bytes: packed.bytes,
-            used: packed.used,
-            missed,
-            effective: {
-              lens: lensResolved ? lensResolved.meta : null,
-              genres: packItems.filter((p) => p.layer === 'genre' || p.layer === 'industry').map((p) => p.meta),
-              form: packItems.find((p) => p.layer === 'form')?.meta || null,
-              look: packItems.find((p) => p.layer === 'look')?.meta || null,
-              movesIncluded: includeMoves,
-            },
-            timestamp: new Date().toISOString(),
+        items.push(withPairedItem({
+          kind,
+          profile,
+          text: packed.text,
+          bytes: packed.bytes,
+          used: packed.used,
+          missed,
+          effective: {
+            lens: lensResolved ? lensResolved.meta : null,
+            genres: packItems.filter((p) => p.layer === 'genre' || p.layer === 'industry').map((p) => p.meta),
+            form: packItems.find((p) => p.layer === 'form')?.meta || null,
+            look: packItems.find((p) => p.layer === 'look')?.meta || null,
+            movesIncluded: includeMoves,
           },
-        });
+          timestamp: new Date().toISOString(),
+        }, itemIndex));
       } catch (error) {
-        items.push({
-          json: {
-            kind,
-            profile,
-            error: error.message || String(error),
-            text: '',
-            bytes: 0,
-            used: [],
-            timestamp: new Date().toISOString(),
-          },
-          pairedItem: { item: idx },
+        handleItemError(this, items, error, itemIndex, {
+          kind,
+          profile,
+          text: '',
+          bytes: 0,
+          used: [],
+          timestamp: new Date().toISOString(),
         });
       }
     }
