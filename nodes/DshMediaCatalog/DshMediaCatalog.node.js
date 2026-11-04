@@ -16,6 +16,7 @@
  */
 
 const { loadCatalog, CATEGORY_LABELS } = require('../../data/data-loader.js');
+const { withPairedItem, handleItemError } = require('../../data/node-execute.js');
 
 async function loadCategoryItems(operation, groupFilter, lightweight) {
   const catalog = await loadCatalog();
@@ -59,7 +60,7 @@ class DshMediaCatalog {
   description = {
     name: 'dshMediaCatalog',
     displayName: 'DSh 媒体清单',
-    icon: 'file:../../media-director.svg',
+    icon: 'file:media-director.svg',
     description: '列出导演透镜、题材、规格、影调等创作要素，供 n8n 工作流下游节点使用（数据嵌入插件，独立运行）',
     group: ['transform'],
     version: 1,
@@ -109,36 +110,34 @@ class DshMediaCatalog {
     const input = this.getInputData();
 
     for (let i = 0; i < input.length; i++) {
-      const operation = this.getNodeParameter('operation', i) || 'lenses';
-      const groupFilter = this.getNodeParameter('groupFilter', i) || '';
-      const lightweight = this.getNodeParameter('lightweight', i) === true || this.getNodeParameter('lightweight', i) === 'true';
+      const failureJson = {
+        operation: '',
+        category: '',
+        items: [],
+        count: 0,
+      };
 
       try {
+        const operation = this.getNodeParameter('operation', i) || 'lenses';
+        const groupFilter = this.getNodeParameter('groupFilter', i) || '';
+        const lightweight = this.getNodeParameter('lightweight', i) === true || this.getNodeParameter('lightweight', i) === 'true';
+        failureJson.operation = operation;
+        failureJson.category = operation;
+
         const categoryItems = await loadCategoryItems(operation, groupFilter, lightweight);
 
-        items.push({
-          json: {
-            operation,
-            category: operation,
-            categoryLabel: CATEGORY_LABELS[operation] || operation,
-            count: categoryItems.length,
-            items: categoryItems,
-            groupFilter,
-            lightweight,
-            timestamp: new Date().toISOString(),
-          },
-        });
+        items.push(withPairedItem({
+          operation,
+          category: operation,
+          categoryLabel: CATEGORY_LABELS[operation] || operation,
+          count: categoryItems.length,
+          items: categoryItems,
+          groupFilter,
+          lightweight,
+          timestamp: new Date().toISOString(),
+        }, i));
       } catch (error) {
-        items.push({
-          json: {
-            operation,
-            category: operation,
-            error: error.message || String(error),
-            items: [],
-            count: 0,
-          },
-          pairedItem: { item: i },
-        });
+        handleItemError(this, items, error, i, failureJson);
       }
     }
 

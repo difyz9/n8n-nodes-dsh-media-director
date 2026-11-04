@@ -16,40 +16,10 @@
  * CommonJS 版本：符合 n8n 自定义节点类导出规范。
  */
 
-const { loadCatalog } = require('../../data/data-loader.js');
+const { loadCatalog, findById, findGenre } = require('../../data/data-loader.js');
+const { mergeNegativePrompts, renderTemplate, buildTemplateVars } = require('../../data/text-utils.js');
+const { withPairedItem, handleItemError } = require('../../data/node-execute.js');
 const { lensOptions, genreAllOptions, formOptions, lookOptions } = require('../../data/catalog-options.js');
-
-/** 从 catalog 列表中按 id 查找 */
-function findById(list, id) {
-  if (!id || !Array.isArray(list)) return null;
-  return list.find((x) => x.id === id) || null;
-}
-
-/** 合并负向词（去重） */
-function mergeNegativePrompts(...prompts) {
-  const seen = new Set();
-  const parts = [];
-  for (const p of prompts) {
-    if (!p) continue;
-    const tokens = p.split(/[，、，\n\r]+/u).map((t) => t.trim()).filter(Boolean);
-    for (const t of tokens) {
-      if (!seen.has(t)) {
-        seen.add(t);
-        parts.push(t);
-      }
-    }
-  }
-  return parts.join(', ');
-}
-
-/** 渲染模板占位符 {{var}} */
-function renderTemplate(template, vars) {
-  let out = template;
-  for (const [key, val] of Object.entries(vars || {})) {
-    out = out.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'ug'), String(val || ''));
-  }
-  return out;
-}
 
 /** 从中文切片提取英文关键词（简化：提取括号内英文） */
 function extractKeywords(cnText) {
@@ -73,7 +43,7 @@ class DshMediaPromptBuilder {
   description = {
     name: 'dshMediaPromptBuilder',
     displayName: 'DSh 提示词构建器',
-    icon: 'file:../../media-director.svg',
+    icon: 'file:media-director.svg',
     description: '基于导演透镜、题材、规格、影调构建 AI 视频/图像生成提示词（数据嵌入插件，独立运行）',
     group: ['transform'],
     version: 1,
@@ -160,31 +130,14 @@ class DshMediaPromptBuilder {
     const input = this.getInputData();
 
     for (let i = 0; i < input.length; i++) {
-      const directorId = this.getNodeParameter('directorId', i) || '';
-      const genreId = this.getNodeParameter('genreId', i) || '';
-      const formId = this.getNodeParameter('formId', i) || '';
-      const lookId = this.getNodeParameter('lookId', i) || '';
-      const sceneDescription = this.getNodeParameter('sceneDescription', i) || '';
-      const outputLanguage = this.getNodeParameter('outputLanguage', i) || 'zh-en';
-      const includeStoryboard = this.getNodeParameter('includeStoryboard', i) !== false;
-
-      // 解析自定义变量
-      let customVars = {};
-      try {
-        const raw = this.getNodeParameter('customVars', i) || '{}';
-        customVars = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      } catch {
-        customVars = {};
-      }
-
       const result = {
-        directorId,
-        genreId,
-        formId,
-        lookId,
-        sceneDescription,
-        customVars,
-        outputLanguage,
+        directorId: '',
+        genreId: '',
+        formId: '',
+        lookId: '',
+        sceneDescription: '',
+        customVars: {},
+        outputLanguage: 'zh-en',
         promptZh: '',
         promptEn: '',
         promptFinal: '',
@@ -196,10 +149,39 @@ class DshMediaPromptBuilder {
       };
 
       try {
+        const directorId = this.getNodeParameter('directorId', i) || '';
+        const genreId = this.getNodeParameter('genreId', i) || '';
+        const formId = this.getNodeParameter('formId', i) || '';
+        const lookId = this.getNodeParameter('lookId', i) || '';
+        const sceneDescription = this.getNodeParameter('sceneDescription', i) || '';
+        const outputLanguage = this.getNodeParameter('outputLanguage', i) || 'zh-en';
+        const includeStoryboard = this.getNodeParameter('includeStoryboard', i) !== false;
+
+        // 非法 JSON 当成空变量；参数读取失败仍交给外层处理
+        const rawVars = this.getNodeParameter('customVars', i) || '{}';
+        let customVars = {};
+        if (typeof rawVars === 'string') {
+          try {
+            customVars = JSON.parse(rawVars);
+          } catch {
+            customVars = {};
+          }
+        } else if (rawVars && typeof rawVars === 'object') {
+          customVars = rawVars;
+        }
+
+        result.directorId = directorId;
+        result.genreId = genreId;
+        result.formId = formId;
+        result.lookId = lookId;
+        result.sceneDescription = sceneDescription;
+        result.customVars = customVars;
+        result.outputLanguage = outputLanguage;
+
         const catalog = await loadCatalog();
 
         const directorMeta = directorId ? findById(catalog.lenses, directorId) : null;
-        const genreMeta = genreId ? findById(catalog.genres, genreId) : null;
+        const genreMeta = genreId ? findGenre(catalog, genreId) : null;
         const formMeta = formId ? findById(catalog.forms, formId) : null;
         const lookMeta = lookId ? findById(catalog.looks, lookId) : null;
 
@@ -237,15 +219,19 @@ class DshMediaPromptBuilder {
         if (slices.lookPrompt) zhParts.push(`[影调] ${slices.lookPrompt}`);
         result.promptZh = zhParts.join('\n\n');
 
-        // 构建英文提示词（核心关键词提取）
+        // 构建英文提示词（核心关键词提取）。题材（含行业）与中文路径一起带上。
         const enParts = [];
         if (sceneDescription) enParts.push(`Scene: ${sceneDescription}`);
         if (slices.directorPrompt) enParts.push(`[Director Lens] ${extractKeywords(slices.directorPrompt)}`);
+        if (slices.genrePrompt) enParts.push(`[Genre] ${extractKeywords(slices.genrePrompt)}`);
         if (slices.lookPrompt) enParts.push(`[Look] ${extractKeywords(slices.lookPrompt)}`);
         if (slices.formPrompt) enParts.push(`[Form] ${extractKeywords(slices.formPrompt)}`);
         result.promptEn = enParts.join('\n\n');
 
-        // 最终输出（按语言选择）
+        // {{var}} 与 sceneDescription 注入中英文提示词，再按语言收成 promptFinal
+        const templateVars = buildTemplateVars(sceneDescription, customVars);
+        result.promptZh = renderTemplate(result.promptZh, templateVars);
+        result.promptEn = renderTemplate(result.promptEn, templateVars);
         if (outputLanguage === 'zh') {
           result.promptFinal = result.promptZh;
         } else if (outputLanguage === 'en') {
@@ -268,12 +254,9 @@ class DshMediaPromptBuilder {
           };
         }
 
-        items.push({ json: result });
+        items.push(withPairedItem(result, i));
       } catch (error) {
-        items.push({
-          json: { ...result, error: error.message || String(error) },
-          pairedItem: { item: i },
-        });
+        handleItemError(this, items, error, i, result);
       }
     }
 

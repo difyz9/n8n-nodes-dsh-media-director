@@ -1,5 +1,5 @@
 {
-  "name": "n8n-nodes-media-director",
+  "name": "n8n-nodes-dsh-media-director",
   "version": "1.0.0",
   "description": "将媒体创作要素（导演透镜、题材、规格、影调、行业、运镜）作为独立的 n8n 节点使用。全部数据嵌入插件内部，不依赖 @ninkch/dsh-infinite-canvas 或任何外部项目。",
   "keywords": [
@@ -16,9 +16,11 @@
   "main": "index.js",
   "scripts": {
     "build": "node scripts/build-data.mjs",
-    "lint": "echo 'No lint configured'"
+    "lint": "echo 'No lint configured'",
+    "test": "node scripts/smoke-test.js"
   },
   "n8n": {
+    "n8nNodesApiVersion": 1,
     "nodes": [
       "nodes/DshMediaCatalog/DshMediaCatalog.node.js",
       "nodes/DshMediaDirector/DshMediaDirector.node.js",
@@ -29,7 +31,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NINKCH/dsh-infinite_canvas.git"
+    "url": "git+https://github.com/difyz9/n8n-nodes-dsh-media-director.git"
   },
   "author": "NINKCH",
   "license": "Apache-2.0",

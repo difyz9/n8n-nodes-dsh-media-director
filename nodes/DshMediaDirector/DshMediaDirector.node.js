@@ -16,7 +16,9 @@
  * CommonJS 版本：符合 n8n 自定义节点类导出规范。
  */
 
-const { loadCatalog } = require('../../data/data-loader.js');
+const { loadCatalog, findById, findGenre } = require('../../data/data-loader.js');
+const { mergeNegativePrompts } = require('../../data/text-utils.js');
+const { withPairedItem, handleItemError } = require('../../data/node-execute.js');
 const { lensOptions, genreAllOptions, formOptions, lookOptions } = require('../../data/catalog-options.js');
 
 /** 合成创作提示词模板 */
@@ -43,17 +45,11 @@ function synthesizePrompt(director, genre, form, look) {
   return template;
 }
 
-/** 从 manifest 列表中按 id 查找 */
-function findById(list, id) {
-  if (!id || !Array.isArray(list)) return null;
-  return list.find((x) => x.id === id) || null;
-}
-
 class DshMediaDirector {
   description = {
     name: 'dshMediaDirector',
     displayName: 'DSh 导演四件套',
-    icon: 'file:../../media-director.svg',
+    icon: 'file:media-director.svg',
     description: '选择导演透镜、题材、规格、影调的组合，输出结构化的媒体创作配置（数据嵌入插件，独立运行）',
     group: ['transform'],
     version: 1,
@@ -116,12 +112,6 @@ class DshMediaDirector {
     const input = this.getInputData();
 
     for (let i = 0; i < input.length; i++) {
-      const directorId = this.getNodeParameter('director', i) || '';
-      const genreId = this.getNodeParameter('genre', i) || '';
-      const formId = this.getNodeParameter('form', i) || '';
-      const lookId = this.getNodeParameter('look', i) || '';
-      const autoPrompt = this.getNodeParameter('autoPrompt', i) !== false;
-
       const result = {
         director: null,
         genre: null,
@@ -135,10 +125,16 @@ class DshMediaDirector {
       };
 
       try {
+        const directorId = this.getNodeParameter('director', i) || '';
+        const genreId = this.getNodeParameter('genre', i) || '';
+        const formId = this.getNodeParameter('form', i) || '';
+        const lookId = this.getNodeParameter('look', i) || '';
+        const autoPrompt = this.getNodeParameter('autoPrompt', i) !== false;
+
         const catalog = await loadCatalog();
 
         const directorMeta = directorId ? findById(catalog.lenses, directorId) : null;
-        const genreMeta = genreId ? findById(catalog.genres, genreId) : null;
+        const genreMeta = genreId ? findGenre(catalog, genreId) : null;
         const formMeta = formId ? findById(catalog.forms, formId) : null;
         const lookMeta = lookId ? findById(catalog.looks, lookId) : null;
 
@@ -148,12 +144,13 @@ class DshMediaDirector {
         result.look = lookMeta;
         result.selectedCount = [directorMeta, genreMeta, formMeta, lookMeta].filter(Boolean).length;
 
-        // 提取负向词（优先看影调，然后是规格、题材、导演）
-        const negLook = lookMeta?.negativePrompt || '';
-        const negForm = formMeta?.negativePrompt || '';
-        const negGenre = genreMeta?.negativePrompt || '';
-        const negDirector = directorMeta?.negativePrompt || '';
-        result.negativePrompt = negLook || negForm || negGenre || negDirector;
+        // 提取负向词（合并去重，与提示词构建器一致）
+        result.negativePrompt = mergeNegativePrompts(
+          directorMeta?.negativePrompt,
+          genreMeta?.negativePrompt,
+          formMeta?.negativePrompt,
+          lookMeta?.negativePrompt,
+        );
 
         // 提取技术参数（合并，后续要素覆盖前面的）
         const params = {};
@@ -168,17 +165,9 @@ class DshMediaDirector {
           result.promptTemplate = synthesizePrompt(directorMeta, genreMeta, formMeta, lookMeta);
         }
 
-        items.push({
-          json: result,
-        });
+        items.push(withPairedItem(result, i));
       } catch (error) {
-        items.push({
-          json: {
-            ...result,
-            error: error.message || String(error),
-          },
-          pairedItem: { item: i },
-        });
+        handleItemError(this, items, error, i, result);
       }
     }
 
